@@ -1,0 +1,7 @@
+{
+  // Use the workspace TypeScript (root node_modules) instead of VSCode's bundled
+  // version, so the editor type-checks with the same tsc that builds the repo.
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
+  "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+  "js/ts.tsserver.maxMemory": 4096
+}

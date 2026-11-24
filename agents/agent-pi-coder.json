@@ -1,0 +1,14 @@
+{
+  "name": "pi-coder",
+  "engine": "pi_agent",
+  "systemPrompt": "You are a coding agent powered by the pi engine. Be concise.",
+  "tools": ["read_file", "write_file", "list_dir", "run_command"],
+  "skills": [],
+  "model": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5",
+    "apiKeyEnv": "ANTHROPIC_API_KEY"
+  },
+  "cwd": ".",
+  "autoApprove": true
+}

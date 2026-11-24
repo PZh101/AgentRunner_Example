@@ -1,0 +1,24 @@
+{
+  "name": "@agent-runner/cli",
+  "version": "0.1.0",
+  "description": "CLI entry: run tasks through configured agents",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "agent-runner": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@agent-runner/core": "workspace:*",
+    "@agent-runner/drivers": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2"
+  }
+}

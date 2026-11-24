@@ -1,0 +1,21 @@
+{
+  "name": "reviewer",
+  "engine": "claude_cli",
+  "systemPrompt": "You are a strict code reviewer. Report findings by severity, cite file paths.",
+  "tools": ["read_file", "list_dir"],
+  "mcpServers": [
+    {
+      "name": "demo-filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  ],
+  "skills": ["code-review"],
+  "model": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-5",
+    "apiKeyEnv": "ANTHROPIC_API_KEY"
+  },
+  "cwd": ".",
+  "autoApprove": true
+}

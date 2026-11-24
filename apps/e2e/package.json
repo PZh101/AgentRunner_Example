@@ -1,0 +1,21 @@
+{
+  "name": "@agent-runner/e2e",
+  "version": "0.1.0",
+  "description": "End-to-end tests for engine drivers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test:pi": "tsx src/pi-agent.e2e.ts",
+    "start:pi": "node dist/pi-agent.e2e.js"
+  },
+  "dependencies": {
+    "@agent-runner/core": "workspace:*",
+    "@agent-runner/drivers": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "pi-longcat",
+  "engine": "pi_agent",
+  "systemPrompt": "You are a concise assistant. Follow the user's formatting instructions exactly.",
+  "tools": ["list_dir", "read_file"],
+  "skills": [],
+  "model": {
+    "provider": "openai",
+    "baseUrl": "https://api.longcat.chat/openai/v1",
+    "modelId": "LongCat-2.5",
+    "apiKeyEnv": "LONGCAT_API_KEY"
+  },
+  "cwd": ".",
+  "autoApprove": true
+}
