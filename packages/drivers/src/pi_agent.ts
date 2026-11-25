@@ -19,10 +19,20 @@ import {
   type BuiltinTool,
   type ContextMessage,
   type EngineDriver,
+  type RunOptions,
   type TaskInput,
   type TaskResult,
 } from '@agent-runner/core';
-import { buildSystemPromptText, composeTaskPrompt, logDriver, resolveApiKey, resolveModelId } from './shared.js';
+import {
+  buildSystemPromptText,
+  composeTaskPrompt,
+  createArtifactCollector,
+  isAbortError,
+  logDriver,
+  resolveApiKey,
+  resolveModelId,
+  toolResultText,
+} from './shared.js';
 import { loadMcpTools } from './mcp-tools.js';
 
 /** Wrap a builtin tool as a pi AgentTool. */
@@ -117,9 +127,11 @@ export const piAgentDriver: EngineDriver = {
   name: 'pi_agent',
   description: 'pi agent loop (Mario Zechner, pi-ai): multi-provider, native tools, MCP via adapter.',
 
-  async run(config: AgentConfig, task: TaskInput): Promise<TaskResult> {
+  async run(config: AgentConfig, task: TaskInput, options?: RunOptions): Promise<TaskResult> {
     const cwd = path.resolve(config.cwd ?? process.cwd());
     const previousCwd = process.cwd();
+    const emit = options?.onEvent;
+    const signal = options?.signal;
 
     const provider = config.model?.provider ?? 'anthropic';
     const apiKey = resolveApiKey(config);
@@ -129,18 +141,24 @@ export const piAgentDriver: EngineDriver = {
     // which would otherwise crash the process outside our try/catch.
     const keyEnvName = config.model?.apiKeyEnv ?? ENV_KEY_BY_PROVIDER[provider];
     if (!apiKey && !(keyEnvName && process.env[keyEnvName])) {
-      return {
-        ok: false,
-        text: '',
-        error: `pi_agent: no API key for provider "${provider}". Set model.apiKeyEnv to the env var holding the key${
-          keyEnvName ? ` (e.g. ${keyEnvName})` : ''
-        }, or set ${ENV_KEY_BY_PROVIDER[provider] ?? 'the provider API key env var'}.`,
-      };
+      const error = `pi_agent: no API key for provider "${provider}". Set model.apiKeyEnv to the env var holding the key${
+        keyEnvName ? ` (e.g. ${keyEnvName})` : ''
+      }, or set ${ENV_KEY_BY_PROVIDER[provider] ?? 'the provider API key env var'}.`;
+      emit?.({ type: 'error', error });
+      return { ok: false, text: '', artifacts: [], error };
+    }
+
+    if (signal?.aborted) {
+      return { ok: false, text: '', artifacts: [], error: 'pi_agent: aborted', abortReason: 'aborted' };
     }
 
     process.chdir(cwd);
 
+    const artifacts = createArtifactCollector(cwd, 'pi_agent', options?.artifacts);
+    const finishArtifacts = () => artifacts?.finish() ?? [];
+
     let mcpBundle: Awaited<ReturnType<typeof loadMcpTools>> | null = null;
+    let text = '';
     try {
       // Builtin tools run natively; extra MCP servers are adapted through the client.
       const nativeTools = resolveTools(config.tools ?? []).map((t) => toPiTool(t, cwd));
@@ -160,22 +178,55 @@ export const piAgentDriver: EngineDriver = {
           tools: [...nativeTools, ...mcpBundle.tools],
         },
         { model, ...(apiKey ? { apiKey } : {}) },
+        signal,
       );
 
-      let text = '';
       let finalMessages: unknown[] = [];
       for await (const event of stream) {
+        if (event.type === 'message_update') {
+          const delta = event.assistantMessageEvent;
+          if (delta.type === 'text_delta' && delta.delta) emit?.({ type: 'text_delta', text: delta.delta });
+          else if (delta.type === 'thinking_delta' && delta.delta) emit?.({ type: 'thinking_delta', text: delta.delta });
+        }
+        if (event.type === 'message_start' || event.type === 'message_end') {
+          if (options?.includeRawMessages) emit?.({ type: 'message', message: event.message });
+        }
         if (event.type === 'message_end' && event.message.role === 'assistant') {
           for (const part of event.message.content ?? []) {
             if (part.type === 'text') text += part.text;
           }
         }
+        if (event.type === 'tool_execution_start') {
+          artifacts?.noteToolCall(event.toolName, event.args);
+          emit?.({ type: 'tool_call', id: event.toolCallId, name: event.toolName, input: event.args });
+        }
+        if (event.type === 'tool_execution_end') {
+          emit?.({
+            type: 'tool_result',
+            id: event.toolCallId,
+            name: event.toolName,
+            content: toolResultText(event.result),
+            isError: event.isError,
+          });
+        }
         if (event.type === 'agent_end') finalMessages = event.messages;
       }
 
-      return { ok: true, text: text.trim(), messages: finalMessages };
+      if (signal?.aborted) {
+        return { ok: false, text: text.trim(), artifacts: finishArtifacts(), error: 'pi_agent: aborted', abortReason: 'aborted' };
+      }
+      return { ok: true, text: text.trim(), messages: finalMessages, artifacts: finishArtifacts() };
     } catch (err) {
-      return { ok: false, text: '', error: `pi_agent failed: ${(err as Error).message}` };
+      const aborted = isAbortError(err, signal);
+      const error = aborted ? 'pi_agent: aborted' : `pi_agent failed: ${(err as Error).message}`;
+      emit?.({ type: 'error', error });
+      return {
+        ok: false,
+        text: text.trim(),
+        artifacts: finishArtifacts(),
+        error,
+        ...(aborted ? { abortReason: 'aborted' as const } : {}),
+      };
     } finally {
       if (mcpBundle) await mcpBundle.close();
       try {

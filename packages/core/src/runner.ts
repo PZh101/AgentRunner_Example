@@ -1,4 +1,4 @@
-import type { AgentConfig, TaskInput, TaskResult } from './types.js';
+import type { AgentConfig, RunOptions, TaskInput, TaskResult } from './types.js';
 import { loadAgentConfig } from './config.js';
 import { getDriver } from './registry.js';
 import { resolveTools } from './builtin-tools.js';
@@ -18,20 +18,27 @@ function validateConfig(config: AgentConfig): void {
 
 /**
  * Run a task for a named agent, e.g. runAgent('coder', { prompt: '...' })
- * looks up agents/agent-coder.json and executes with its engine.
+ * looks up agents/agent-<coder>.json and executes with its engine.
  */
-export async function runAgentByName(name: string, task: TaskInput): Promise<TaskResult> {
+export async function runAgentByName(name: string, task: TaskInput, options?: RunOptions): Promise<TaskResult> {
   const config = loadAgentConfig(name);
-  return runAgent(config, task);
+  return runAgent(config, task, options);
 }
 
 /** Run a task with an already-resolved config. */
-export async function runAgent(config: AgentConfig, task: TaskInput): Promise<TaskResult> {
+export async function runAgent(config: AgentConfig, task: TaskInput, options?: RunOptions): Promise<TaskResult> {
+  const emit = options?.onEvent;
   try {
     validateConfig(config);
     const driver = getDriver(config.engine);
-    return await driver.run(config, task);
+    const result = await driver.run(config, task, options);
+    emit?.({ type: 'done', result });
+    return result;
   } catch (err) {
-    return { ok: false, text: '', error: (err as Error).message };
+    const error = (err as Error).message;
+    emit?.({ type: 'error', error });
+    const result: TaskResult = { ok: false, text: '', artifacts: [], error };
+    emit?.({ type: 'done', result });
+    return result;
   }
 }

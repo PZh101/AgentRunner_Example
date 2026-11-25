@@ -71,6 +71,31 @@ export interface TaskInput {
   context?: string[];
 }
 
+/** One thing an execution produced, normalized across engines. */
+export interface Artifact {
+  /** `file` = a workspace file change; `text` = inline output; `other` = engine-specific. */
+  kind: 'file' | 'text' | 'other';
+  /**
+   * Path for file artifacts: POSIX-style relative to `cwd` when inside it,
+   * absolute otherwise. Absent for inline text artifacts.
+   */
+  path?: string;
+  /** How the file changed, when the engine or snapshot can tell. */
+  change?: 'created' | 'modified' | 'deleted';
+  /** File size in bytes (post-run), when known. */
+  bytes?: number;
+  /** Inline content for small text files / text artifacts (see ArtifactOptions). */
+  content?: string;
+  /** MIME type when known (text artifacts default to text/plain). */
+  mimeType?: string;
+  /** Tool that produced it, when the engine reported one. */
+  tool?: string;
+  /** How the artifact was discovered. */
+  source: 'workspace' | 'tool' | 'engine';
+  /** Free-form engine-specific extras. */
+  metadata?: Record<string, unknown>;
+}
+
 /** Normalized result every driver must return. */
 export interface TaskResult {
   ok: boolean;
@@ -78,8 +103,55 @@ export interface TaskResult {
   text: string;
   /** Full transcript (engine-specific shape), optional */
   messages?: unknown[];
+  /** Everything the execution produced. Always present; `[]` when none. */
+  artifacts: Artifact[];
+  /** Set when the run stopped for a reason other than normal completion. */
+  abortReason?: 'aborted' | 'timeout';
   /** Error message when ok === false */
   error?: string;
+}
+
+/**
+ * Normalized incremental event stream, emitted by every driver through
+ * `RunOptions.onEvent`. Text deltas are best-effort (engines that cannot
+ * stream fall back to complete-message granularity).
+ */
+export type AgentEvent =
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'tool_call'; id?: string; name: string; input?: unknown }
+  | { type: 'tool_result'; id?: string; name?: string; content: string; isError?: boolean }
+  /** Raw engine message, only when `includeRawMessages` is set. */
+  | { type: 'message'; message: unknown }
+  | { type: 'error'; error: string }
+  /** Emitted exactly once by the runner when the execution is over. */
+  | { type: 'done'; result: TaskResult };
+
+/** Artifact collection tuning. */
+export interface ArtifactOptions {
+  /** Diff the workspace before/after the run (default true). */
+  workspaceDiff?: boolean;
+  /** Inline file content up to this many bytes; 0 disables (default 16384). */
+  inlineContentBytes?: number;
+  /** Abort the workspace scan after this many files (default 5000). */
+  maxFiles?: number;
+  /** Extra directory names or cwd-relative path prefixes to skip. */
+  ignore?: string[];
+}
+
+/** Per-run options accepted by every driver. */
+export interface RunOptions {
+  /** Receives normalized streaming events as the engine produces them. */
+  onEvent?: (event: AgentEvent) => void;
+  /** Cancels the run. Drivers kill subprocesses / abort engine loops. */
+  signal?: AbortSignal;
+  /**
+   * Collect artifacts (default: on). `false` disables collection;
+   * an object tunes workspace diffing.
+   */
+  artifacts?: boolean | ArtifactOptions;
+  /** Forward raw engine messages as `message` events (default false). */
+  includeRawMessages?: boolean;
 }
 
 /**
@@ -92,7 +164,7 @@ export interface EngineDriver {
   /** Human-readable description for `list` */
   description: string;
   /** Execute a task using the given resolved agent config */
-  run(config: AgentConfig, task: TaskInput): Promise<TaskResult>;
+  run(config: AgentConfig, task: TaskInput, options?: RunOptions): Promise<TaskResult>;
 }
 
 /** A builtin tool: JSON schema + executable handler. */

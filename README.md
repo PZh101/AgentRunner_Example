@@ -88,13 +88,65 @@ await runAgentByName('coder', {
 });
 ```
 
+## 运行选项（RunOptions）
+
+`runAgent(config, task, options)` / `runAgentByName(name, task, options)` 的第三个参数对三种引擎一致：
+
+| 字段 | 说明 |
+|---|---|
+| `onEvent` | 接收统一流式事件 `AgentEvent`，引擎有增量就立即回调 |
+| `signal` | `AbortSignal`；驱动会 abort 引擎循环 / kill 子进程 |
+| `artifacts` | 产物收集（默认开启）：`false` 关闭；对象可配置 `workspaceDiff` / `inlineContentBytes` / `maxFiles` / `ignore` |
+| `includeRawMessages` | 额外把引擎原始消息作为 `message` 事件透传 |
+
+```ts
+const controller = new AbortController();
+const result = await runAgentByName('coder', { prompt: '把 README 里的错别字修掉' }, {
+  signal: controller.signal,
+  onEvent: (event) => {
+    if (event.type === 'text_delta') process.stdout.write(event.text);
+    else if (event.type === 'tool_call') console.error(`[tool] ${event.name}`);
+  },
+});
+console.log(result.artifacts);
+```
+
+事件类型：`text_delta` / `thinking_delta` / `tool_call` / `tool_result` / `message`（可选原始消息）/ `error` / `done`。
+`done` 由 Runner 在结束时保证发出且只发一次。
+
+## 执行结果（TaskResult）
+
+| 字段 | 说明 |
+|---|---|
+| `ok` | 是否成功 |
+| `text` | 最终 assistant 文本 |
+| `messages` | 引擎原始 transcript（形状随引擎，可选） |
+| `artifacts` | 本次执行产物，始终存在（无产物为 `[]`） |
+| `abortReason` | 被中断时为 `aborted` |
+| `error` | 失败原因 |
+
+`Artifact` 是跨引擎统一的产物描述：
+
+| 字段 | 说明 |
+|---|---|
+| `kind` | `file` / `text` / `other` |
+| `path` | 文件产物路径：cwd 内为 POSIX 相对路径，否则绝对路径 |
+| `change` | `created` / `modified` / `deleted` |
+| `bytes` | 文件大小（字节） |
+| `content` | 小文本文件内容（默认 ≤16KB，可用 `inlineContentBytes` 调整） |
+| `tool` | 产出它的工具名（引擎上报时） |
+| `source` | `workspace`（快照 diff）/ `tool`（工具上报）/ `engine` |
+
+收集方式：运行前后对 `cwd` 做 size+mtime 快照 diff，再叠加工具事件上报的写入路径（覆盖 `cwd` 外或忽略目录内的写入）。
+默认忽略 `node_modules` / `.git` / `dist` 等目录，单次最多返回 200 条，扫描上限 5000 个文件。
+
 ## 新增执行引擎
 
 1. 在 `packages/drivers/src/` 新建 `<engine>.ts`，实现 `EngineDriver`（见 `packages/core/src/types.ts`）。
 2. 在 `packages/drivers/src/index.ts` 的 `DRIVERS` 中加入它。
 3. 配置里写 `"engine": "<engine>"` 即可。
 
-Driver 需要处理的映射（以现有实现为参考）：系统提示词 + Skill 注入、工具 → 引擎原生机制、MCP 接入、模型地址/ID/Provider、工作目录、自动审批、结果归一化为 `TaskResult`。
+Driver 需要处理的映射（以现有实现为参考）：系统提示词 + Skill 注入、工具 → 引擎原生机制、MCP 接入、模型地址/ID/Provider、工作目录、自动审批、增量事件 → `AgentEvent`、结果归一化为 `TaskResult`（含 `artifacts`）。
 
 ## 各引擎能力对照
 
@@ -105,3 +157,6 @@ Driver 需要处理的映射（以现有实现为参考）：系统提示词 + S
 | Skill | 注入系统提示词 | 注入系统提示词 | 注入系统提示词 |
 | 自定义 baseUrl | `ANTHROPIC_BASE_URL` | `ANTHROPIC_BASE_URL` | Model.baseUrl 覆盖 |
 | 自动审批 | `permissionMode` | `--permission-mode` | pi 自主执行 |
+| 流式输出 | `stream_event` 增量 | `stream-json` 逐行增量 | `text_delta` 增量 |
+| 中断 | `abortController` | kill 子进程 | `AbortSignal` |
+| 产物收集 | 快照 diff + 工具事件 | 快照 diff + 工具事件 | 快照 diff + 工具事件 |

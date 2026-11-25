@@ -12,10 +12,12 @@
  *   1. basic completion  — ok result with non-empty text
  *   2. tool use          — model calls list_dir; a toolResult for it appears
  *   3. missing API key   — driver fails fast with a clear error
+ *   4. print cwd         — no assertions: ask the agent to list the current
+ *                          directory and print its output (streamed) verbatim
  *
  * Run: pnpm --filter @agent-runner/e2e test:pi   (build core/drivers first)
  */
-import { loadAgentConfig, runAgent, type AgentConfig, type TaskResult } from '@agent-runner/core';
+import { loadAgentConfig, runAgent, type AgentConfig, type RunOptions, type TaskResult } from '@agent-runner/core';
 import { registerAllDrivers } from '@agent-runner/drivers';
 
 registerAllDrivers();
@@ -80,6 +82,34 @@ async function testMissingApiKey(): Promise<void> {
   );
 }
 
+/**
+ * No assertions: ask the agent to show the current directory and print its
+ * output verbatim. Text deltas are printed live to exercise the event stream.
+ */
+async function testPrintCwd(): Promise<void> {
+  console.log('\n[e2e] --- pi_agent: current directory output ---');
+  let sawDelta = false;
+  const result = await runAgentByName('pi-longcat', '请使用 list_dir 工具列出当前目录的内容，并原样输出。', {
+    onEvent: (event) => {
+      if (event.type === 'text_delta') {
+        sawDelta = true;
+        process.stdout.write(event.text);
+      } else if (event.type === 'tool_call') {
+        console.log(`\n[e2e] tool: ${event.name}`);
+      }
+    },
+  });
+
+  if (sawDelta) process.stdout.write('\n');
+  else console.log(result.text.trim() || '(empty output)');
+
+  console.log(`[e2e] ok=${result.ok} artifacts=${result.artifacts.length}`);
+  if (!result.ok) console.log(`[e2e] error: ${result.error ?? 'unknown error'}`);
+  for (const artifact of result.artifacts) {
+    console.log(`[e2e]   artifact ${artifact.change ?? 'produced'} ${artifact.path ?? artifact.kind}`);
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadAgentConfig('pi-longcat');
   const keyEnv = config.model?.apiKeyEnv ?? 'LONGCAT_API_KEY';
@@ -93,15 +123,16 @@ async function main(): Promise<void> {
   await testBasicCompletion();
   await testToolUse();
   await testMissingApiKey();
+  await testPrintCwd();
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);
   if (failed.length > 0) process.exitCode = 1;
 }
 
-async function runAgentByName(name: string, prompt: string): Promise<TaskResult> {
+async function runAgentByName(name: string, prompt: string, options?: RunOptions): Promise<TaskResult> {
   const config = loadAgentConfig(name);
-  return runAgent(config, { prompt });
+  return runAgent(config, { prompt }, options);
 }
 
 main().catch((err) => {

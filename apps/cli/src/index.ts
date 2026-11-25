@@ -8,10 +8,29 @@
  *
  * Registering drivers here wires every engine into the runner.
  */
-import { runAgentByName, loadAgentConfig, listAgentNames, listDrivers, listBuiltinTools } from '@agent-runner/core';
+import { runAgentByName, loadAgentConfig, listAgentNames, listDrivers, listBuiltinTools, type Artifact } from '@agent-runner/core';
 import { registerAllDrivers } from '@agent-runner/drivers';
 
 registerAllDrivers();
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/** Artifacts go to stderr; stdout stays reserved for assistant text. */
+function printArtifacts(artifacts: Artifact[]): void {
+  if (artifacts.length === 0) return;
+  console.error(`[agent-runner] artifacts (${artifacts.length}):`);
+  for (const a of artifacts) {
+    const change = (a.change ?? 'produced').padEnd(8);
+    const path = a.path ?? '(inline)';
+    const size = a.bytes !== undefined ? ` ${formatBytes(a.bytes)}` : '';
+    const tool = a.tool ? ` [${a.tool}]` : '';
+    console.error(`  - ${change} ${path}${size}${tool}`);
+  }
+}
 
 function printUsage(): void {
   console.log(`Usage:
@@ -49,11 +68,40 @@ async function main(): Promise<void> {
     }
     const prompt = taskParts.join(' ');
     console.error(`[agent-runner] running agent "${agent}" on task: ${prompt}`);
-    const result = await runAgentByName(agent, { prompt });
+
+    const controller = new AbortController();
+    const onSigint = (): void => {
+      console.error('\n[agent-runner] aborting...');
+      controller.abort();
+    };
+    process.once('SIGINT', onSigint);
+
+    let sawDelta = false;
+    let lineOpen = false;
+    const result = await runAgentByName(agent, { prompt }, {
+      signal: controller.signal,
+      onEvent: (event) => {
+        if (event.type === 'text_delta') {
+          sawDelta = true;
+          lineOpen = true;
+          process.stdout.write(event.text);
+        } else if (event.type === 'tool_call') {
+          if (lineOpen) process.stderr.write('\n');
+          lineOpen = false;
+          process.stderr.write(`[agent-runner] tool: ${event.name}\n`);
+        }
+      },
+    });
+    process.removeListener('SIGINT', onSigint);
+
+    if (lineOpen) process.stdout.write('\n');
     if (result.ok) {
-      console.log(result.text);
+      if (!sawDelta) console.log(result.text);
+      printArtifacts(result.artifacts);
     } else {
+      if (!sawDelta && result.text) console.log(result.text);
       console.error(`[agent-runner] FAILED: ${result.error ?? 'unknown error'}`);
+      printArtifacts(result.artifacts);
       process.exitCode = 1;
     }
     return;
